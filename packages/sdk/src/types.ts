@@ -255,6 +255,8 @@ export interface TrackedLink {
   trackingUrl: string
   tagId: string | null
   scenarioId: string | null
+  introTemplateId: string | null
+  rewardTemplateId: string | null
   isActive: boolean
   clickCount: number
   createdAt: string
@@ -277,6 +279,17 @@ export interface CreateTrackedLinkInput {
   originalUrl: string
   tagId?: string | null
   scenarioId?: string | null
+  introTemplateId?: string | null
+  rewardTemplateId?: string | null
+}
+
+export interface UpdateTrackedLinkInput {
+  name?: string
+  tagId?: string | null
+  scenarioId?: string | null
+  introTemplateId?: string | null
+  rewardTemplateId?: string | null
+  isActive?: boolean
 }
 
 // ─── Forms ──────────────────────────────────────────────

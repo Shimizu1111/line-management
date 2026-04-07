@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { LineClient } from '@line-crm/line-sdk';
-import { getLineAccounts } from '@line-crm/db';
+import { getLineAccounts, getTrafficPoolBySlug, getRandomPoolAccount, getPoolAccounts } from '@line-crm/db';
 import { processStepDeliveries } from './services/step-delivery.js';
 import { processScheduledBroadcasts } from './services/broadcast.js';
 import { processReminderDeliveries } from './services/reminder-delivery.js';
@@ -129,81 +129,176 @@ app.get('/api/qr', async (c) => {
 
 // Short link: /r/:ref → landing page with LINE open button
 // Supports query params: ?form=FORM_ID (auto-push form after friend add)
-app.get('/r/:ref', (c) => {
+// Mobile: resolves pool → button links directly to LIFF URL (triggers Universal Link)
+// Desktop: QR code encodes LIFF URL
+app.get('/r/:ref', async (c) => {
   const ref = c.req.param('ref');
   const formId = c.req.query('form') || '';
   const baseUrl = new URL(c.req.url).origin;
+
+  // Resolve LIFF URL from pool (same logic as /auth/line)
+  let liffUrl = c.env.LIFF_URL;
+  const poolSlug = c.req.query('pool') || 'main';
+  const pool = await getTrafficPoolBySlug(c.env.DB, poolSlug);
+  if (pool) {
+    const account = await getRandomPoolAccount(c.env.DB, pool.id);
+    if (account) {
+      if (account.liff_id) liffUrl = `https://liff.line.me/${account.liff_id}`;
+    } else {
+      const allAccounts = await getPoolAccounts(c.env.DB, pool.id);
+      if (allAccounts.length === 0) {
+        if (pool.liff_id) liffUrl = `https://liff.line.me/${pool.liff_id}`;
+      }
+    }
+  }
+
+  // Build LIFF URL with params (direct link for Universal Link)
+  const liffIdMatch = liffUrl.match(/liff\.line\.me\/([0-9]+-[A-Za-z0-9]+)/);
+  const liffParams = new URLSearchParams();
+  if (liffIdMatch) liffParams.set('liffId', liffIdMatch[1]);
+  if (ref) liffParams.set('ref', ref);
+  if (formId) liffParams.set('form', formId);
+  const gate = c.req.query('gate');
+  if (gate) liffParams.set('gate', gate);
+  const xh = c.req.query('xh');
+  if (xh) liffParams.set('xh', xh);
+  const liffTarget = liffParams.toString() ? `${liffUrl}?${liffParams.toString()}` : liffUrl;
+
+  // Build /auth/oauth fallback URL — forces OAuth flow without X detection,
+  // so the X warning button doesn't loop back to this landing page
   const authParams = new URLSearchParams();
   authParams.set('ref', ref);
   if (formId) authParams.set('form', formId);
-  const poolSlug = c.req.query('pool');
-  if (poolSlug) authParams.set('pool', poolSlug);
-  const gate = c.req.query('gate');
+  const poolParam = c.req.query('pool');
+  if (poolParam) authParams.set('pool', poolParam);
   if (gate) authParams.set('gate', gate);
-  const xh = c.req.query('xh');
   if (xh) authParams.set('xh', xh);
-  const target = `${baseUrl}/auth/line?${authParams.toString()}`;
+  const authFallback = `${baseUrl}/auth/oauth?${authParams.toString()}`;
 
   const ua = (c.req.header('user-agent') || '').toLowerCase();
   const isMobile = /iphone|ipad|android|mobile/.test(ua);
+  // X (Twitter) iOS in-app browser since v11.42 uses custom WKWebView that
+  // blocks ALL Universal Links and deep links. Detect via UA and show
+  // explicit "open in Safari" instruction to recover lost users.
+  const isXInAppBrowser = /twitter|twitterandroid/i.test(c.req.header('user-agent') || '');
+  // Other in-app browsers (Instagram, FB, LINE itself, etc.) — same UL limitations
+  const isOtherInApp = /\b(fbav|fban|instagram|line\/|micromessenger)\b/i.test(c.req.header('user-agent') || '');
 
-  if (isMobile) {
+  if (isMobile && (isXInAppBrowser || isOtherInApp)) {
+    // In-app browser path: explain the issue + offer two recovery paths
+    const inAppName = isXInAppBrowser ? 'X' : 'アプリ内';
     return c.html(`<!DOCTYPE html>
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>LINE Harness</title>
+<title>LINE で開く</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-body{font-family:'Hiragino Sans',system-ui,sans-serif;background:#0d1117;color:#fff;display:flex;justify-content:center;align-items:center;min-height:100vh}
-.card{text-align:center;max-width:400px;width:90%;padding:48px 24px}
-h1{font-size:28px;font-weight:800;margin-bottom:8px}
-.sub{font-size:14px;color:rgba(255,255,255,0.5);margin-bottom:40px}
-.btn{display:block;width:100%;padding:18px;border:none;border-radius:12px;font-size:18px;font-weight:700;text-decoration:none;text-align:center;color:#fff;background:#06C755;transition:opacity .15s}
-.btn:active{opacity:.85}
-.note{font-size:12px;color:rgba(255,255,255,0.3);margin-top:24px;line-height:1.6}
+body{font-family:'Hiragino Sans','Helvetica Neue',system-ui,sans-serif;background:#f5f7f5;display:flex;justify-content:center;align-items:center;min-height:100vh;padding:16px}
+.card{background:#fff;border-radius:20px;box-shadow:0 2px 20px rgba(0,0,0,0.06);text-align:center;max-width:380px;width:100%;padding:36px 24px 32px;border:1px solid rgba(0,0,0,0.04)}
+.line-icon{width:44px;height:44px;margin:0 auto 16px}
+.line-icon svg{width:44px;height:44px}
+.title{font-size:17px;color:#222;font-weight:700;margin-bottom:10px;line-height:1.5}
+.msg{font-size:13px;color:#666;margin-bottom:24px;line-height:1.7}
+.steps{background:#f9f9f9;border-radius:12px;padding:18px 20px;margin-bottom:24px;text-align:left}
+.steps-title{font-size:13px;color:#06C755;font-weight:700;margin-bottom:10px;display:flex;align-items:center;gap:6px}
+.steps ol{margin:0;padding-left:20px;font-size:13px;color:#555;line-height:1.8}
+.btn{display:block;width:100%;padding:16px;border:none;border-radius:12px;font-size:16px;font-weight:700;text-decoration:none;text-align:center;color:#fff;background:#06C755;box-shadow:0 2px 12px rgba(6,199,85,0.2);transition:all .15s;cursor:pointer}
+.btn:active{transform:scale(0.98);opacity:.9}
+.footer{font-size:11px;color:#bbb;margin-top:20px;line-height:1.5}
 </style>
 </head>
 <body>
 <div class="card">
-<h1>LINE Harness</h1>
-<p class="sub">L社 / U社 の無料代替 OSS</p>
-<a href="${target}" class="btn">LINE で体験する</a>
-<p class="note">友だち追加するだけで<br>ステップ配信・フォーム・自動返信を体験できます</p>
+<div class="line-icon">
+<svg viewBox="0 0 48 48" fill="none"><rect width="48" height="48" rx="12" fill="#06C755"/><path d="M24 12C17.37 12 12 16.58 12 22.2c0 3.54 2.35 6.65 5.86 8.47-.2.74-.76 2.75-.87 3.17-.14.55.2.54.42.39.18-.12 2.84-1.88 4-2.65.84.13 1.7.22 2.59.22 6.63 0 12-4.58 12-10.2S30.63 12 24 12z" fill="#fff"/></svg>
+</div>
+<p class="title">${inAppName}内ブラウザでは<br>LINE が開けません</p>
+<p class="msg">外部ブラウザ（Safari / Chrome）で開いてから「LINE で開く」をタップしてください</p>
+<div class="steps">
+<div class="steps-title">📱 ブラウザで開く手順</div>
+<ol>
+<li>画面下中央の URL「<strong>workers.dev ⋮</strong>」の<strong>「⋮」</strong>をタップ</li>
+<li>表示メニューから「<strong>ブラウザで開く</strong>」を選択</li>
+<li>移動先のページで「LINE で開く」をタップ</li>
+</ol>
+</div>
+<a href="${liffTarget}" class="btn">このまま LINE を開く</a>
+<p class="footer">友だち追加で全機能を無料体験できます</p>
 </div>
 </body>
 </html>`);
   }
 
-  // PC: show QR code page
+  if (isMobile) {
+    // Regular mobile browser (Safari/Chrome): direct LIFF URL link
+    // User tap on liff.line.me triggers Universal Link → LINE app opens
+    return c.html(`<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LINE で開く</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Hiragino Sans','Helvetica Neue',system-ui,sans-serif;background:#f5f7f5;display:flex;justify-content:center;align-items:center;min-height:100vh}
+.card{background:#fff;border-radius:20px;box-shadow:0 2px 20px rgba(0,0,0,0.06);text-align:center;max-width:360px;width:90%;padding:40px 28px 36px;border:1px solid rgba(0,0,0,0.04)}
+.line-icon{width:48px;height:48px;margin:0 auto 20px}
+.line-icon svg{width:48px;height:48px}
+.msg{font-size:15px;color:#444;font-weight:500;margin-bottom:28px;line-height:1.6}
+.btn{display:block;width:100%;padding:16px;border:none;border-radius:12px;font-size:16px;font-weight:700;text-decoration:none;text-align:center;color:#fff;background:#06C755;box-shadow:0 2px 12px rgba(6,199,85,0.2);transition:all .15s}
+.btn:active{transform:scale(0.98);opacity:.9}
+.fallback{font-size:12px;color:#999;margin-top:16px;line-height:1.5}
+.fallback a{color:#06C755}
+.footer{font-size:11px;color:#bbb;margin-top:16px;line-height:1.5}
+</style>
+</head>
+<body>
+<div class="card">
+<div class="line-icon">
+<svg viewBox="0 0 48 48" fill="none"><rect width="48" height="48" rx="12" fill="#06C755"/><path d="M24 12C17.37 12 12 16.58 12 22.2c0 3.54 2.35 6.65 5.86 8.47-.2.74-.76 2.75-.87 3.17-.14.55.2.54.42.39.18-.12 2.84-1.88 4-2.65.84.13 1.7.22 2.59.22 6.63 0 12-4.58 12-10.2S30.63 12 24 12z" fill="#fff"/></svg>
+</div>
+<p class="msg">LINE アプリで開きます</p>
+<a href="${liffTarget}" class="btn">LINE で開く</a>
+<p class="fallback">開かない場合は<a href="${authFallback}">こちら</a></p>
+<p class="footer">友だち追加で全機能を無料体験できます</p>
+</div>
+</body>
+</html>`);
+  }
+
+  // PC: show QR code page — QR encodes LIFF URL directly
   return c.html(`<!DOCTYPE html>
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>LINE Harness</title>
+<title>LINE で開く</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-body{font-family:'Hiragino Sans',system-ui,sans-serif;background:#0d1117;color:#fff;display:flex;justify-content:center;align-items:center;min-height:100vh}
-.card{background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:24px;padding:48px;text-align:center;max-width:480px;width:90%}
-h1{font-size:24px;font-weight:800;margin-bottom:8px}
-.sub{font-size:14px;color:rgba(255,255,255,0.5);margin-bottom:32px}
-.qr{background:#fff;border-radius:16px;padding:24px;display:inline-block;margin-bottom:24px}
+body{font-family:'Hiragino Sans','Helvetica Neue',system-ui,sans-serif;background:#f5f7f5;display:flex;justify-content:center;align-items:center;min-height:100vh}
+.card{background:#fff;border-radius:20px;box-shadow:0 2px 20px rgba(0,0,0,0.06);text-align:center;max-width:480px;width:90%;padding:48px;border:1px solid rgba(0,0,0,0.04)}
+.line-icon{width:48px;height:48px;margin:0 auto 20px}
+.line-icon svg{width:48px;height:48px}
+.msg{font-size:15px;color:#444;font-weight:500;margin-bottom:32px;line-height:1.6}
+.qr{background:#f9f9f9;border-radius:16px;padding:24px;display:inline-block;margin-bottom:24px;border:1px solid rgba(0,0,0,0.04)}
 .qr img{display:block;width:240px;height:240px}
-.hint{font-size:13px;color:rgba(255,255,255,0.4);line-height:1.6}
-.badge{display:inline-block;margin-top:24px;padding:8px 20px;border-radius:20px;font-size:12px;font-weight:600;color:#06C755;background:rgba(6,199,85,0.1);border:1px solid rgba(6,199,85,0.2)}
+.hint{font-size:13px;color:#999;line-height:1.6}
+.footer{font-size:11px;color:#bbb;margin-top:24px;line-height:1.5}
 </style>
 </head>
 <body>
 <div class="card">
-<h1>LINE Harness</h1>
-<p class="sub">スマートフォンで QR コードを読み取ってください</p>
+<div class="line-icon">
+<svg viewBox="0 0 48 48" fill="none"><rect width="48" height="48" rx="12" fill="#06C755"/><path d="M24 12C17.37 12 12 16.58 12 22.2c0 3.54 2.35 6.65 5.86 8.47-.2.74-.76 2.75-.87 3.17-.14.55.2.54.42.39.18-.12 2.84-1.88 4-2.65.84.13 1.7.22 2.59.22 6.63 0 12-4.58 12-10.2S30.63 12 24 12z" fill="#fff"/></svg>
+</div>
+<p class="msg">スマートフォンで QR コードを読み取ってください</p>
 <div class="qr">
-<img src="/api/qr?size=240x240&data=${encodeURIComponent(target)}" alt="QR Code">
+<img src="/api/qr?size=240x240&data=${encodeURIComponent(liffTarget)}" alt="QR Code">
 </div>
 <p class="hint">LINE アプリのカメラまたは<br>スマートフォンのカメラで読み取れます</p>
-<div class="badge">LINE Harness OSS</div>
+<p class="footer">友だち追加で全機能を無料体験できます</p>
 </div>
 </body>
 </html>`);

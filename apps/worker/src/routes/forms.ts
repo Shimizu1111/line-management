@@ -211,6 +211,7 @@ forms.post('/api/forms/:id/submit', async (c) => {
       lineUserId?: string;
       friendId?: string;
       data?: Record<string, unknown>;
+      _skipWebhook?: boolean;
     }>();
 
     const submissionData = body.data ?? {};
@@ -293,6 +294,25 @@ forms.post('/api/forms/:id/submit', async (c) => {
     if (friendId) {
       const db = c.env.DB;
       const now = jstNow();
+
+      // Resolve reward template from the friend's pinned first_tracked_link_id.
+      // This column is set ONCE on first friend-add (or first form-link push for
+      // an already-friend) and never overwritten — so an attacker who is already
+      // a friend cannot swap the campaign id in the form URL to claim another
+      // campaign's reward.
+      // This OVERRIDES form.on_submit_message_* — letting one form be reused
+      // across multiple campaigns with different rewards.
+      let rewardTemplate: import('@line-crm/db').MessageTemplate | null = null;
+      {
+        const { getFriendById, getTrackedLinkById, getMessageTemplateById } = await import('@line-crm/db');
+        const friendRow = await getFriendById(db, friendId);
+        if (friendRow?.first_tracked_link_id) {
+          const trackedLink = await getTrackedLinkById(db, friendRow.first_tracked_link_id);
+          if (trackedLink?.reward_template_id) {
+            rewardTemplate = await getMessageTemplateById(db, trackedLink.reward_template_id);
+          }
+        }
+      }
 
       const sideEffects: Promise<unknown>[] = [];
 
@@ -437,8 +457,14 @@ forms.post('/api/forms/:id/submit', async (c) => {
 
           const messages: ReturnType<typeof buildMessage>[] = [];
 
-          if (form.on_submit_message_type && form.on_submit_message_content) {
-            // Custom message replaces default diagnostic result
+          const { buildRewardMessage } = await import('../services/reward-message.js');
+          const rewardFromTrackedLink = buildRewardMessage(rewardTemplate, friend.display_name);
+
+          if (rewardFromTrackedLink) {
+            // Tracked-link reward template overrides everything (per-campaign reward)
+            messages.push(rewardFromTrackedLink as ReturnType<typeof buildMessage>);
+          } else if (form.on_submit_message_type && form.on_submit_message_content) {
+            // Custom form message replaces default diagnostic result
             const expanded = expandVariables(form.on_submit_message_content, friendData, apiOrigin);
             messages.push(buildMessage(form.on_submit_message_type, expanded));
           } else {

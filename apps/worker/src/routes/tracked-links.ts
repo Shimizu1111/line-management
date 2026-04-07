@@ -3,6 +3,7 @@ import {
   getTrackedLinks,
   getTrackedLinkById,
   createTrackedLink,
+  updateTrackedLink,
   deleteTrackedLink,
   recordLinkClick,
   getLinkClicks,
@@ -23,6 +24,8 @@ function serializeTrackedLink(row: TrackedLink, baseUrl: string) {
     trackingUrl,
     tagId: row.tag_id,
     scenarioId: row.scenario_id,
+    introTemplateId: row.intro_template_id,
+    rewardTemplateId: row.reward_template_id,
     isActive: Boolean(row.is_active),
     clickCount: row.click_count,
     createdAt: row.created_at,
@@ -83,6 +86,8 @@ trackedLinks.post('/api/tracked-links', async (c) => {
       originalUrl: string;
       tagId?: string | null;
       scenarioId?: string | null;
+      introTemplateId?: string | null;
+      rewardTemplateId?: string | null;
     }>();
 
     if (!body.name || !body.originalUrl) {
@@ -94,12 +99,39 @@ trackedLinks.post('/api/tracked-links', async (c) => {
       originalUrl: body.originalUrl,
       tagId: body.tagId ?? null,
       scenarioId: body.scenarioId ?? null,
+      introTemplateId: body.introTemplateId ?? null,
+      rewardTemplateId: body.rewardTemplateId ?? null,
     });
 
     const base = getBaseUrl(c);
     return c.json({ success: true, data: serializeTrackedLink(link, base) }, 201);
   } catch (err) {
     console.error('POST /api/tracked-links error:', err);
+    return c.json({ success: false, error: 'Internal server error' }, 500);
+  }
+});
+
+// PATCH /api/tracked-links/:id — update mutable fields
+trackedLinks.patch('/api/tracked-links/:id', async (c) => {
+  try {
+    const id = c.req.param('id');
+    const body = await c.req.json<{
+      name?: string;
+      tagId?: string | null;
+      scenarioId?: string | null;
+      introTemplateId?: string | null;
+      rewardTemplateId?: string | null;
+      isActive?: boolean;
+    }>();
+
+    const link = await updateTrackedLink(c.env.DB, id, body);
+    if (!link) {
+      return c.json({ success: false, error: 'Tracked link not found' }, 404);
+    }
+    const base = getBaseUrl(c);
+    return c.json({ success: true, data: serializeTrackedLink(link, base) });
+  } catch (err) {
+    console.error('PATCH /api/tracked-links/:id error:', err);
     return c.json({ success: false, error: 'Internal server error' }, 500);
   }
 });

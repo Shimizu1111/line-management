@@ -9,6 +9,7 @@ export interface Friend {
   user_id: string | null;
   line_account_id: string | null;
   metadata: string;
+  first_tracked_link_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -69,6 +70,30 @@ export async function getFriendById(
     .prepare(`SELECT * FROM friends WHERE id = ?`)
     .bind(id)
     .first<Friend>();
+}
+
+/**
+ * Set friend.first_tracked_link_id ONLY if it is currently NULL.
+ * Used to authoritatively pin a friend to the campaign they entered through,
+ * without ever overwriting once set. The conditional `WHERE ... IS NULL` clause
+ * makes this safe against client-side ref tampering: an existing friend cannot
+ * change their attribution by replaying /auth/callback or /api/liff/send-form-link
+ * with a different ref.
+ */
+export async function setFriendFirstTrackedLinkIfNull(
+  db: D1Database,
+  friendId: string,
+  trackedLinkId: string,
+): Promise<void> {
+  const now = jstNow();
+  await db
+    .prepare(
+      `UPDATE friends
+       SET first_tracked_link_id = ?, updated_at = ?
+       WHERE id = ? AND first_tracked_link_id IS NULL`,
+    )
+    .bind(trackedLinkId, now, friendId)
+    .run();
 }
 
 export interface UpsertFriendInput {
