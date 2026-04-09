@@ -33,6 +33,8 @@ webhook.post('/webhook', async (c) => {
     return c.json({ status: 'ok' }, 200);
   }
 
+  console.log('Webhook received:', JSON.stringify({ destination: (body as { destination?: string }).destination, eventCount: body.events?.length }));
+
   // Multi-account: resolve credentials from DB by destination (channel user ID)
   // or fall back to environment variables (default account)
   let channelSecret = c.env.LINE_CHANNEL_SECRET;
@@ -41,9 +43,11 @@ webhook.post('/webhook', async (c) => {
 
   if ((body as { destination?: string }).destination) {
     const accounts = await getLineAccounts(db);
+    console.log('DB accounts:', accounts.length, 'destination:', (body as { destination?: string }).destination);
     for (const account of accounts) {
       if (!account.is_active) continue;
       const isValid = await verifySignature(account.channel_secret, rawBody, signature);
+      console.log('Account', account.id, 'signature valid:', isValid);
       if (isValid) {
         channelSecret = account.channel_secret;
         channelAccessToken = account.channel_access_token;
@@ -55,6 +59,7 @@ webhook.post('/webhook', async (c) => {
 
   // Verify with resolved secret
   const valid = await verifySignature(channelSecret, rawBody, signature);
+  console.log('Final signature valid:', valid, 'matchedAccountId:', matchedAccountId);
   if (!valid) {
     console.error('Invalid LINE signature');
     return c.json({ status: 'ok' }, 200);
