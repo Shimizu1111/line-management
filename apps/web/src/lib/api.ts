@@ -23,6 +23,7 @@ import type {
   AccountHealthLog,
   AccountMigration,
   StaffMember,
+  AutoReply,
 } from '@line-crm/shared'
 
 import type { Broadcast } from '@line-crm/shared'
@@ -553,5 +554,23 @@ export const api = {
       fetchApi<ApiResponse<null>>(`/api/staff/${id}`, { method: 'DELETE' }),
     regenerateKey: (id: string) =>
       fetchApi<ApiResponse<{ apiKey: string }>>(`/api/staff/${id}/regenerate-key`, { method: 'POST' }),
+  },
+  autoReplies: {
+    list: (params?: { accountId?: string }) => {
+      const query = params?.accountId ? '?accountId=' + params.accountId : ''
+      return fetchApi<ApiResponse<AutoReply[]>>('/api/auto-replies' + query)
+    },
+    create: (data: { keyword: string; matchType: 'exact' | 'contains'; responseType?: string; responseContent: string; lineAccountId?: string }) =>
+      fetchApi<ApiResponse<AutoReply>>('/api/auto-replies', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    update: (id: string, data: { keyword?: string; matchType?: 'exact' | 'contains'; responseType?: string; responseContent?: string; isActive?: boolean }) =>
+      fetchApi<ApiResponse<AutoReply>>(`/api/auto-replies/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(data),
+      }),
+    delete: (id: string) =>
+      fetchApi<ApiResponse<null>>(`/api/auto-replies/${id}`, { method: 'DELETE' }),
   },
 }
