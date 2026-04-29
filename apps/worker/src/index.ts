@@ -3,7 +3,7 @@ import { cors } from 'hono/cors';
 import { LineClient } from '@line-crm/line-sdk';
 import { getLineAccounts, getTrafficPoolBySlug, getRandomPoolAccount, getPoolAccounts } from '@line-crm/db';
 import { processStepDeliveries } from './services/step-delivery.js';
-import { processScheduledBroadcasts } from './services/broadcast.js';
+import { processScheduledBroadcasts, processQueuedBroadcasts } from './services/broadcast.js';
 import { processReminderDeliveries } from './services/reminder-delivery.js';
 import { checkAccountHealth } from './services/ban-monitor.js';
 import { refreshLineAccessTokens } from './services/token-refresh.js';
@@ -28,6 +28,7 @@ import { reminders } from './routes/reminders.js';
 import { scoring } from './routes/scoring.js';
 import { templates } from './routes/templates.js';
 import { chats } from './routes/chats.js';
+import { conversations } from './routes/conversations.js';
 import { notifications } from './routes/notifications.js';
 import { stripe } from './routes/stripe.js';
 import { health } from './routes/health.js';
@@ -38,6 +39,7 @@ import { forms } from './routes/forms.js';
 import { adPlatforms } from './routes/ad-platforms.js';
 import { staff } from './routes/staff.js';
 import { images } from './routes/images.js';
+import { accountSettings } from './routes/account-settings.js';
 import { setup } from './routes/setup.js';
 import { autoReplies } from './routes/auto-replies.js';
 import { trafficPools } from './routes/traffic-pools.js';
@@ -58,6 +60,8 @@ export type Env = {
     LINE_LOGIN_CHANNEL_SECRET: string;
     WORKER_URL: string;
     X_HARNESS_URL?: string;  // Optional: X Harness API URL for account linking
+    IG_HARNESS_URL?: string;  // Optional: IG Harness API URL for cross-platform linking
+    IG_HARNESS_LINK_SECRET?: string;  // Shared secret for IG Harness link-line webhook
   };
   Variables: {
     staff: { id: string; name: string; role: 'owner' | 'admin' | 'staff' };
@@ -95,6 +99,7 @@ app.route('/', reminders);
 app.route('/', scoring);
 app.route('/', templates);
 app.route('/', chats);
+app.route('/', conversations);
 app.route('/', notifications);
 app.route('/', stripe);
 app.route('/', health);
@@ -108,6 +113,7 @@ app.route('/', images);
 app.route('/', setup);
 app.route('/', autoReplies);
 app.route('/', trafficPools);
+app.route('/', accountSettings);
 app.route('/', meetCallback);
 app.route('/', messageTemplates);
 
@@ -162,6 +168,8 @@ app.get('/r/:ref', async (c) => {
   if (gate) liffParams.set('gate', gate);
   const xh = c.req.query('xh');
   if (xh) liffParams.set('xh', xh);
+  const ig = c.req.query('ig');
+  if (ig) liffParams.set('ig', ig);
   const liffTarget = liffParams.toString() ? `${liffUrl}?${liffParams.toString()}` : liffUrl;
 
   // Build /auth/oauth fallback URL — forces OAuth flow without X detection,
@@ -173,6 +181,7 @@ app.get('/r/:ref', async (c) => {
   if (poolParam) authParams.set('pool', poolParam);
   if (gate) authParams.set('gate', gate);
   if (xh) authParams.set('xh', xh);
+  if (ig) authParams.set('ig', ig);
   const authFallback = `${baseUrl}/auth/oauth?${authParams.toString()}`;
 
   const ua = (c.req.header('user-agent') || '').toLowerCase();
@@ -323,19 +332,8 @@ async function scheduled(
   env: Env['Bindings'],
   _ctx: ExecutionContext,
 ): Promise<void> {
-  // Get all active accounts from DB, plus the default env account
+  // Get all active accounts from DB
   const dbAccounts = await getLineAccounts(env.DB);
-  const activeTokens = new Set<string>();
-
-  // Default account from env
-  activeTokens.add(env.LINE_CHANNEL_ACCESS_TOKEN);
-
-  // DB accounts
-  for (const account of dbAccounts) {
-    if (account.is_active) {
-      activeTokens.add(account.channel_access_token);
-    }
-  }
 
   // Build LineClient map for insight fetching (keyed by account id)
   const lineClients = new Map<string, LineClient>();
@@ -346,16 +344,21 @@ async function scheduled(
   }
   const defaultLineClient = new LineClient(env.LINE_CHANNEL_ACCESS_TOKEN);
 
-  // Run delivery for each account
+  // 配信系は1回だけ実行（内部でfriendのline_account_idから正しいlineClientを動的解決）
+  // 以前はアカウントごとにループしていたが、アカウントフィルタなしのDBクエリで
+  // 全アカウントの配信が各ループで重複実行されていたバグを修正
   const jobs = [];
-  for (const token of activeTokens) {
-    const lineClient = new LineClient(token);
-    jobs.push(
-      processStepDeliveries(env.DB, lineClient, env.WORKER_URL),
-      processScheduledBroadcasts(env.DB, lineClient, env.WORKER_URL),
-      processReminderDeliveries(env.DB, lineClient),
-    );
-  }
+  jobs.push(
+    processStepDeliveries(env.DB, defaultLineClient, env.WORKER_URL),
+    processScheduledBroadcasts(env.DB, defaultLineClient, env.WORKER_URL),
+    processReminderDeliveries(env.DB, defaultLineClient),
+  );
+  // キュー処理は1回だけ実行（内部でアカウント別lineClientを解決する）
+  // ロック解除: タイムアウトでstuckした配信を復旧
+  const { recoverStalledBroadcasts, recoverStuckDeliveries } = await import('@line-crm/db');
+  jobs.push(recoverStuckDeliveries(env.DB));
+  jobs.push(recoverStalledBroadcasts(env.DB));
+  jobs.push(processQueuedBroadcasts(env.DB, defaultLineClient, env.WORKER_URL));
   jobs.push(checkAccountHealth(env.DB));
   jobs.push(refreshLineAccessTokens(env.DB));
 
@@ -366,6 +369,14 @@ async function scheduled(
     await processInsightFetch(env.DB, lineClients, defaultLineClient);
   } catch (e) {
     console.error('Insight fetch error:', e);
+  }
+
+  // Cross-account duplicate detection & auto-tagging
+  try {
+    const { processDuplicateDetection } = await import('./services/duplicate-detect.js');
+    await processDuplicateDetection(env.DB);
+  } catch (e) {
+    console.error('Duplicate detection error:', e);
   }
 }
 
