@@ -31,6 +31,33 @@ import type { Broadcast } from '@line-crm/shared'
 /** Broadcast type from API (now camelCase after worker serialization) */
 export type ApiBroadcast = Broadcast
 
+export type ApiForm = {
+  id: string
+  name: string
+  description: string | null
+  fields: FormField[]
+  onSubmitTagId: string | null
+  onSubmitScenarioId: string | null
+  onSubmitMessageType: string | null
+  onSubmitMessageContent: string | null
+  onSubmitWebhookUrl: string | null
+  onSubmitWebhookHeaders: string | null
+  onSubmitWebhookFailMessage: string | null
+  saveToMetadata: boolean
+  isActive: boolean
+  submitCount: number
+  createdAt: string
+  updatedAt: string
+}
+
+export type FormField = {
+  name: string
+  label: string
+  type: 'text' | 'textarea' | 'select' | 'radio' | 'checkbox' | 'email' | 'tel' | 'number'
+  required: boolean
+  options?: string[]
+}
+
 export type BroadcastInsight = {
   broadcastId?: string
   delivered: number | null
@@ -360,6 +387,7 @@ export const api = {
       description?: string | null
       conditions?: Record<string, unknown>
       priority?: number
+      lineAccountId?: string
     }) =>
       fetchApi<ApiResponse<Automation>>('/api/automations', {
         method: 'POST',
@@ -555,6 +583,88 @@ export const api = {
     regenerateKey: (id: string) =>
       fetchApi<ApiResponse<{ apiKey: string }>>(`/api/staff/${id}/regenerate-key`, { method: 'POST' }),
   },
+  forms: {
+    list: () =>
+      fetchApi<ApiResponse<ApiForm[]>>('/api/forms'),
+    get: (id: string) =>
+      fetchApi<ApiResponse<ApiForm>>(`/api/forms/${id}`),
+    create: (data: {
+      name: string
+      description?: string | null
+      fields?: FormField[]
+      onSubmitTagId?: string | null
+      onSubmitScenarioId?: string | null
+      onSubmitMessageType?: string | null
+      onSubmitMessageContent?: string | null
+      onSubmitWebhookUrl?: string | null
+      onSubmitWebhookHeaders?: string | null
+      onSubmitWebhookFailMessage?: string | null
+      saveToMetadata?: boolean
+    }) =>
+      fetchApi<ApiResponse<ApiForm>>('/api/forms', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    update: (id: string, data: Partial<{
+      name: string
+      description: string | null
+      fields: FormField[]
+      onSubmitTagId: string | null
+      onSubmitScenarioId: string | null
+      onSubmitMessageType: string | null
+      onSubmitMessageContent: string | null
+      onSubmitWebhookUrl: string | null
+      onSubmitWebhookHeaders: string | null
+      onSubmitWebhookFailMessage: string | null
+      saveToMetadata: boolean
+      isActive: boolean
+    }>) =>
+      fetchApi<ApiResponse<ApiForm>>(`/api/forms/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(data),
+      }),
+    delete: (id: string) =>
+      fetchApi<ApiResponse<null>>(`/api/forms/${id}`, { method: 'DELETE' }),
+  },
+  trackedLinks: {
+    list: () =>
+      fetchApi<ApiResponse<{
+        id: string; name: string; originalUrl: string; trackingUrl: string
+        tagId: string | null; scenarioId: string | null
+        introTemplateId: string | null; rewardTemplateId: string | null
+        isActive: boolean; clickCount: number; createdAt: string; updatedAt: string
+      }[]>>('/api/tracked-links'),
+    get: (id: string) =>
+      fetchApi<ApiResponse<{
+        id: string; name: string; originalUrl: string; trackingUrl: string
+        tagId: string | null; scenarioId: string | null
+        introTemplateId: string | null; rewardTemplateId: string | null
+        isActive: boolean; clickCount: number; createdAt: string; updatedAt: string
+        clicks: { id: string; friendId: string | null; friendDisplayName: string | null; clickedAt: string }[]
+      }>>(`/api/tracked-links/${id}`),
+    create: (data: { name: string; originalUrl: string; tagId?: string | null; scenarioId?: string | null; introTemplateId?: string | null; rewardTemplateId?: string | null }) =>
+      fetchApi<ApiResponse<{
+        id: string; name: string; originalUrl: string; trackingUrl: string
+        tagId: string | null; scenarioId: string | null
+        introTemplateId: string | null; rewardTemplateId: string | null
+        isActive: boolean; clickCount: number; createdAt: string; updatedAt: string
+      }>>('/api/tracked-links', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    update: (id: string, data: { name?: string; tagId?: string | null; scenarioId?: string | null; isActive?: boolean }) =>
+      fetchApi<ApiResponse<{
+        id: string; name: string; originalUrl: string; trackingUrl: string
+        tagId: string | null; scenarioId: string | null
+        introTemplateId: string | null; rewardTemplateId: string | null
+        isActive: boolean; clickCount: number; createdAt: string; updatedAt: string
+      }>>(`/api/tracked-links/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify(data),
+      }),
+    delete: (id: string) =>
+      fetchApi<ApiResponse<null>>(`/api/tracked-links/${id}`, { method: 'DELETE' }),
+  },
   autoReplies: {
     list: (params?: { accountId?: string }) => {
       const query = params?.accountId ? '?accountId=' + params.accountId : ''
@@ -572,5 +682,21 @@ export const api = {
       }),
     delete: (id: string) =>
       fetchApi<ApiResponse<null>>(`/api/auto-replies/${id}`, { method: 'DELETE' }),
+  },
+  entryRoutes: {
+    list: () =>
+      fetchApi<ApiResponse<{ id: string; refCode: string; name: string; tagId: string | null; scenarioId: string | null; redirectUrl: string | null; isActive: boolean; createdAt: string; updatedAt: string }[]>>('/api/entry-routes'),
+    create: (data: { name: string; refCode?: string; tagId?: string | null; scenarioId?: string | null; redirectUrl?: string | null }) =>
+      fetchApi<ApiResponse<{ id: string; refCode: string; name: string; tagId: string | null; scenarioId: string | null; redirectUrl: string | null; isActive: boolean; createdAt: string; updatedAt: string }>>('/api/entry-routes', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    update: (id: string, data: { name?: string; refCode?: string; tagId?: string | null; scenarioId?: string | null; redirectUrl?: string | null; isActive?: boolean }) =>
+      fetchApi<ApiResponse<{ id: string; refCode: string; name: string; tagId: string | null; scenarioId: string | null; redirectUrl: string | null; isActive: boolean; createdAt: string; updatedAt: string }>>(`/api/entry-routes/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(data),
+      }),
+    delete: (id: string) =>
+      fetchApi<ApiResponse<null>>(`/api/entry-routes/${id}`, { method: 'DELETE' }),
   },
 }

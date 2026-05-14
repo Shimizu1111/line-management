@@ -1,8 +1,16 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import type { Tag } from '@line-crm/shared'
 import { api, type ApiBroadcast } from '@/lib/api'
+
+interface Template {
+  id: string
+  name: string
+  category: string
+  messageType: string
+  messageContent: string
+}
 import { useAccount } from '@/contexts/account-context'
 import FlexPreviewComponent from '@/components/flex-preview'
 
@@ -41,6 +49,14 @@ export default function BroadcastForm({ tags, onSuccess, onCancel }: BroadcastFo
   })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [templates, setTemplates] = useState<Template[]>([])
+  const [selectedTemplateId, setSelectedTemplateId] = useState('')
+
+  useEffect(() => {
+    api.templates.list().then((res) => {
+      if (res.success) setTemplates(res.data)
+    })
+  }, [])
 
   const handleSave = async () => {
     if (!form.title.trim()) { setError('配信タイトルを入力してください'); return }
@@ -100,6 +116,36 @@ export default function BroadcastForm({ tags, onSuccess, onCancel }: BroadcastFo
             onChange={(e) => setForm({ ...form, title: e.target.value })}
           />
         </div>
+
+        {/* Template select */}
+        {templates.length > 0 && (
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">テンプレートから入力</label>
+            <select
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 bg-white"
+              value={selectedTemplateId}
+              onChange={(e) => {
+                const id = e.target.value
+                setSelectedTemplateId(id)
+                if (id) {
+                  const tpl = templates.find((t) => t.id === id)
+                  if (tpl) {
+                    setForm({
+                      ...form,
+                      messageType: tpl.messageType as ApiBroadcast['messageType'],
+                      messageContent: tpl.messageContent,
+                    })
+                  }
+                }
+              }}
+            >
+              <option value="">手動入力</option>
+              {templates.map((tpl) => (
+                <option key={tpl.id} value={tpl.id}>{tpl.name}{tpl.category ? ` (${tpl.category})` : ''}</option>
+              ))}
+            </select>
+          </div>
+        )}
 
         {/* Message type */}
         <div>

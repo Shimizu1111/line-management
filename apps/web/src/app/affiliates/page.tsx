@@ -2,9 +2,13 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import Header from '@/components/layout/header'
+import EntryRoutesManager from '@/components/affiliates/entry-routes-manager'
+import TrackedLinksManager from '@/components/affiliates/tracked-links-manager'
 
 import { fetchApi } from '@/lib/api'
 import { useAccount } from '@/contexts/account-context'
+
+type Tab = 'analytics' | 'routes' | 'links'
 
 const WORKER_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8787'
 
@@ -37,6 +41,7 @@ interface RefDetailData {
 
 export default function AttributionPage() {
   const { selectedAccountId } = useAccount()
+  const [activeTab, setActiveTab] = useState<Tab>('analytics')
   const [summary, setSummary] = useState<RefSummaryData | null>(null)
   const [loading, setLoading] = useState(true)
   const [selectedRef, setSelectedRef] = useState<string | null>(null)
@@ -94,13 +99,44 @@ export default function AttributionPage() {
     return new Date(iso).toLocaleDateString('ja-JP', { year: 'numeric', month: '2-digit', day: '2-digit' })
   }
 
+  const tabs: { key: Tab; label: string }[] = [
+    { key: 'analytics', label: '分析' },
+    { key: 'routes', label: '経路管理' },
+    { key: 'links', label: 'URL管理' },
+  ]
+
   return (
     <div>
       <Header
-        title="流入経路分析"
-        description="ref コード別の友だち獲得・クリック実績"
+        title="流入経路"
+        description="流入経路の分析・管理"
       />
 
+      {/* Tabs */}
+      <div className="flex gap-4 border-b border-gray-200 mb-6">
+        {tabs.map((tab) => (
+          <button
+            key={tab.key}
+            onClick={() => setActiveTab(tab.key)}
+            className={`pb-2 px-1 text-sm font-medium transition-colors ${
+              activeTab === tab.key
+                ? 'border-b-2 border-green-500 text-green-600'
+                : 'text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Tab: 経路管理 */}
+      {activeTab === 'routes' && <EntryRoutesManager />}
+
+      {/* Tab: URL管理 */}
+      {activeTab === 'links' && <TrackedLinksManager />}
+
+      {/* Tab: 分析 */}
+      {activeTab === 'analytics' && <>
       {/* Summary cards */}
       {summary && (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
@@ -205,6 +241,7 @@ export default function AttributionPage() {
           </table>
         </div>
       )}
+      </>}
     </div>
   )
 }
